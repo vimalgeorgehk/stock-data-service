@@ -97,13 +97,13 @@ ttm AS (
   GROUP BY symbol
 ),
 latest_fy AS (
-  SELECT symbol, year, revenue, net_income, free_cash_flow, profit_margin, book_value, total_assets, equity,
+  SELECT symbol, year, revenue, net_income, free_cash_flow, profit_margin, book_value, total_assets, equity,eps, eps_diluted,
          ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY year DESC) AS rn
   FROM shibui.fundamentals_yearly
   WHERE ticker = '${ticker}'
 ),
 hist_fy AS (
-  SELECT symbol, year, revenue, net_income, free_cash_flow, profit_margin, book_value, total_assets, equity, shares_outstanding
+  SELECT symbol, year, revenue, net_income, free_cash_flow, profit_margin, book_value, total_assets, equity, shares_outstanding,eps, eps_diluted
   FROM shibui.fundamentals_yearly
   WHERE ticker = '${ticker}'
   ORDER BY year DESC
@@ -191,6 +191,8 @@ SELECT
   dd.free_cash_flow_yield, dd.trailing_pe, dd.operating_pe, dd.dividend_yield,
   ttm.ttm_revenue, ttm.ttm_net_income, ttm.ttm_fcf, ttm.ttm_margin, ttm.fcf_margin_ttm,
   fy.revenue AS revenue_annual, fy.free_cash_flow AS free_cash_flow_annual, fy.profit_margin AS profit_margin_annual, fy.year,
+  fy.eps AS eps_annual,
+  fy.eps_diluted AS eps_diluted_annual,
   agg5.avg_net_income_5yr, agg5.avg_fcf_5yr, agg5.avg_profit_margin_5yr, agg5.cagr_revenue_5yr, agg5.cagr_book_5yr,
   agg10.avg_profit_margin_10yr, agg10.cagr_revenue_10yr, agg10.cagr_book_10yr,
   (v.enterprise_value / NULLIF(ttm.ttm_net_income,0)) AS ev_earnings,
@@ -211,6 +213,8 @@ SELECT
   (SELECT shares_outstanding FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestShares,
   (SELECT free_cash_flow FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestFCF,
   (SELECT net_income FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestNetIncome,
+  (SELECT eps FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestEPS,
+  (SELECT eps_diluted FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestEPSDiluted,
   -- TTM ratios
   dd.trailing_pe AS ttmPE,
   (v.enterprise_value / NULLIF(ttm.ttm_fcf,0)) AS ttmPFCF,
@@ -218,7 +222,7 @@ SELECT
   ttm.fcf_margin_ttm AS ttmFCFMargin,
   agg5.cagr_revenue_5yr AS ttmRevenueGrowth,
   (ttm.ttm_net_income / NULLIF(fy.equity,0)) AS ttmROIC,
-  -- Historical arrays (DuckDB syntax)
+  -- Historical arrays
   (SELECT json_group_array(json_object('year', year, 'value', roic)) FROM ratios) AS roic,
   (SELECT json_group_array(json_object('year', year, 'value', pe)) FROM ratios) AS pe,
   (SELECT json_group_array(json_object('year', year, 'value', pfcf)) FROM ratios) AS pfcf,
@@ -226,7 +230,9 @@ SELECT
   (SELECT json_group_array(json_object('year', year, 'value', fcf_margin)) FROM ratios) AS fcfMargin,
   (SELECT json_group_array(json_object('year', year, 'value', revenue_growth)) FROM ratios) AS revenueGrowth,
   (SELECT json_group_array(json_object('year', year, 'value', shares)) FROM ratios) AS shares,
-  (SELECT json_group_array(json_object('year', year, 'value', fcf)) FROM ratios) AS fcf
+  (SELECT json_group_array(json_object('year', year, 'value', fcf)) FROM ratios) AS fcf,
+  (SELECT json_group_array(json_object('year', year, 'value', eps)) FROM hist_fy) AS eps,
+  (SELECT json_group_array(json_object('year', year, 'value', eps_diluted)) FROM hist_fy) AS epsDiluted
 FROM shibui.general_info g
 LEFT JOIN (SELECT * FROM latest_val WHERE rn = 1) v ON v.symbol = g.symbol
 LEFT JOIN (SELECT * FROM latest_dd WHERE rn = 1) dd ON dd.symbol = g.symbol
@@ -241,6 +247,7 @@ LEFT JOIN (SELECT * FROM recent_filings WHERE rn = 1) rf ON rf.accession_number 
 LEFT JOIN shibui.analyst_estimates ae ON ae.symbol = g.symbol
 WHERE g.ticker = '${ticker}'
 LIMIT 1;
+
 
 
 `.trim();
