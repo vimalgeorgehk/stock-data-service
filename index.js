@@ -57,7 +57,7 @@ app.get('/patterns', async (req, res) => {
   }
 });
 
-// Snapshot route
+// Snapshot route (quarterly balance-sheet debug fields + ROIC using quarterly values)
 app.get('/snapshot', async (req, res) => {
   const ticker = (req.query.ticker || '').toUpperCase();
   if (!ticker) return res.status(400).json({ error: 'Missing ticker param' });
@@ -86,6 +86,13 @@ recent_q AS (
   FROM shibui.fundamentals_quarterly
   WHERE ticker = '${ticker}' AND revenue IS NOT NULL
 ),
+-- Latest quarterly balance-sheet row (for debug_total_assets/current_liabilities)
+latest_lq AS (
+  SELECT symbol, date, total_assets, current_liabilities, debt, cash_and_equivalents,
+         ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+  FROM shibui.fundamentals_quarterly
+  WHERE ticker = '${ticker}'
+),
 ttm AS (
   SELECT symbol,
          SUM(revenue) AS ttm_revenue,
@@ -97,13 +104,15 @@ ttm AS (
   GROUP BY symbol
 ),
 latest_fy AS (
-  SELECT symbol, year, revenue, net_income, free_cash_flow, profit_margin, book_value, total_assets, equity,eps, eps_diluted,
+  SELECT symbol, year, revenue, net_income, free_cash_flow, profit_margin, book_value,
+         total_assets, current_liabilities, equity, eps, eps_diluted,
          ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY year DESC) AS rn
   FROM shibui.fundamentals_yearly
   WHERE ticker = '${ticker}'
 ),
 hist_fy AS (
-  SELECT symbol, year, revenue, net_income, free_cash_flow, profit_margin, book_value, total_assets, equity, shares_outstanding,eps, eps_diluted
+  SELECT symbol, year, revenue, net_income, free_cash_flow, profit_margin, book_value,
+         total_assets, current_liabilities, equity, shares_outstanding, eps, eps_diluted
   FROM shibui.fundamentals_yearly
   WHERE ticker = '${ticker}'
   ORDER BY year DESC
@@ -117,6 +126,16 @@ agg5 AS (
     EXP((LN(MAX(revenue)) - LN(MIN(revenue)))/5) - 1 AS cagr_revenue_5yr,
     EXP((LN(MAX(book_value)) - LN(MIN(book_value)))/5) - 1 AS cagr_book_5yr
   FROM (SELECT * FROM hist_fy ORDER BY year DESC LIMIT 5)
+),
+-- NEW: average of (total_assets - current_liabilities) over last 5 annual rows
+agg5_denoms AS (
+  SELECT AVG(total_assets - current_liabilities) AS avg_assets_minus_curr_liab
+  FROM (
+    SELECT total_assets, current_liabilities
+    FROM hist_fy
+    ORDER BY year DESC
+    LIMIT 5
+  ) sub
 ),
 agg10 AS (
   SELECT
@@ -163,7 +182,7 @@ ratios AS (
     ROUND(AVG(f.free_cash_flow / NULLIF(f.revenue,0)),4) AS fcf_margin,
     AVG(f.shares_outstanding) AS shares,
     AVG(f.free_cash_flow) AS fcf,
-    MAX(rgc.revenue_growth) AS revenue_growth   -- bring in the precomputed growth
+    MAX(rgc.revenue_growth) AS revenue_growth
   FROM shibui.fundamentals_yearly f
   LEFT JOIN shibui.valuation v
     ON v.symbol = f.symbol AND EXTRACT(YEAR FROM v.date) = f.year
@@ -193,6 +212,11 @@ SELECT
   fy.revenue AS revenue_annual, fy.free_cash_flow AS free_cash_flow_annual, fy.profit_margin AS profit_margin_annual, fy.year,
   fy.eps AS eps_annual,
   fy.eps_diluted AS eps_diluted_annual,
+  -- debug fields (latest fiscal year and latest quarter)
+  fy.total_assets AS debug_total_assets_annual,
+  fy.current_liabilities AS debug_current_liabilities_annual,
+  (SELECT total_assets FROM latest_lq WHERE rn = 1) AS debug_total_assets_quarterly,
+  (SELECT current_liabilities FROM latest_lq WHERE rn = 1) AS debug_current_liabilities_quarterly,
   agg5.avg_net_income_5yr, agg5.avg_fcf_5yr, agg5.avg_profit_margin_5yr, agg5.cagr_revenue_5yr, agg5.cagr_book_5yr,
   agg10.avg_profit_margin_10yr, agg10.cagr_revenue_10yr, agg10.cagr_book_10yr,
   (v.enterprise_value / NULLIF(ttm.ttm_net_income,0)) AS ev_earnings,
@@ -203,26 +227,66 @@ SELECT
   h.wk52_high, h.wk52_low,
   q.current_price,
   rf.form_type, rf.filing_date, rf.report_date, rf.filing_url, rf.accession_number,
-  -- Analyst estimates
-  ae.forward_pe,
-  ae.forward_pe_next_year,
-  ae.forward_peg,
-  ae.wall_street_target_price,
-  -- Latest values
+  ae.forward_pe, ae.forward_pe_next_year, ae.forward_peg, ae.wall_street_target_price,
   (SELECT revenue FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestRevenue,
   (SELECT shares_outstanding FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestShares,
   (SELECT free_cash_flow FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestFCF,
   (SELECT net_income FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestNetIncome,
   (SELECT eps FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestEPS,
   (SELECT eps_diluted FROM hist_fy ORDER BY year DESC LIMIT 1) AS latestEPSDiluted,
-  -- TTM ratios
   dd.trailing_pe AS ttmPE,
   (v.enterprise_value / NULLIF(ttm.ttm_fcf,0)) AS ttmPFCF,
   ttm.ttm_margin AS ttmProfitMargin,
   ttm.fcf_margin_ttm AS ttmFCFMargin,
   agg5.cagr_revenue_5yr AS ttmRevenueGrowth,
-  (ttm.ttm_net_income / NULLIF(fy.equity,0)) AS ttmROIC,
-  -- Historical arrays
+
+-- TTM ROIC using latest quarterly balance-sheet denominator
+(
+  ttm.ttm_net_income
+  / NULLIF(
+      COALESCE(
+        (SELECT total_assets FROM latest_lq WHERE rn = 1),
+        fy.total_assets,
+        0
+      )
+      - COALESCE(
+        (SELECT current_liabilities FROM latest_lq WHERE rn = 1),
+        fy.current_liabilities,
+        0
+      )
+    , 0)
+) AS ttmROIC_quarterly,
+
+-- TTM ROIC using latest annual balance-sheet denominator
+(
+  ttm.ttm_net_income
+  / NULLIF(
+      COALESCE(
+        fy.total_assets,
+        (SELECT total_assets FROM latest_lq WHERE rn = 1),
+        0
+      )
+      - COALESCE(
+        fy.current_liabilities,
+        (SELECT current_liabilities FROM latest_lq WHERE rn = 1),
+        0
+      )
+    , 0)
+) AS ttmROIC_annual,
+
+-- Five-year ROIC: avg net income (5yr) / avg (total_assets - current_liabilities) over last 5 years
+(
+  agg5.avg_net_income_5yr
+  / NULLIF(
+      COALESCE(
+        (SELECT avg_assets_minus_curr_liab FROM agg5_denoms),
+        (fy.total_assets - fy.current_liabilities),
+        0
+      )
+    , 0)
+) AS five_year_ROIC,
+
+
   (SELECT json_group_array(json_object('year', year, 'value', roic)) FROM ratios) AS roic,
   (SELECT json_group_array(json_object('year', year, 'value', pe)) FROM ratios) AS pe,
   (SELECT json_group_array(json_object('year', year, 'value', pfcf)) FROM ratios) AS pfcf,
@@ -243,24 +307,23 @@ LEFT JOIN agg10 ON g.symbol IS NOT NULL
 LEFT JOIN (SELECT * FROM latest_tech WHERE rn = 1) tech ON tech.symbol = g.symbol
 LEFT JOIN (SELECT * FROM hi52 WHERE rn = 1) h ON h.symbol = g.symbol
 LEFT JOIN (SELECT * FROM latest_quote WHERE rn = 1) q ON q.symbol = g.symbol
+LEFT JOIN (SELECT * FROM latest_lq WHERE rn = 1) lq ON lq.symbol = g.symbol
 LEFT JOIN (SELECT * FROM recent_filings WHERE rn = 1) rf ON rf.accession_number IS NOT NULL
 LEFT JOIN shibui.analyst_estimates ae ON ae.symbol = g.symbol
 WHERE g.ticker = '${ticker}'
 LIMIT 1;
 
-
-
 `.trim();
 
     const response = await callTool('stock_data_query', {
-      user_prompt: `${ticker} full snapshot`,
+      user_prompt: `${ticker} full snapshot (quarterly balance-sheet)`,
       query: sql
     }, 1003);
 
-res.json({
-  ticker: ticker,
-  response
-});
+    res.json({
+      ticker: ticker,
+      response
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -268,5 +331,3 @@ res.json({
 
 // --- Start server ---
 app.listen(3000, () => console.log('API running locally on port 3000'));
-
-
