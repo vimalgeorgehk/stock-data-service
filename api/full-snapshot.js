@@ -1,11 +1,45 @@
-// /api/full-snapshot.js
+const MCP_URL = 'https://mcp.shibui.finance/mcp';
+
+// --- Helpers ---
+async function parseSSE(response) {
+  const text = await response.text();
+  const lines = text.split("\n");
+  const dataLine = lines.find(line => line.startsWith("data:"));
+  if (dataLine) {
+    const jsonStr = dataLine.replace("data: ", "");
+    try {
+      return JSON.parse(jsonStr);
+    } catch (e) {
+      return { error: "Failed to parse JSON from SSE data line", raw: jsonStr };
+    }
+  }
+  return { error: "No data line found", raw: text };
+}
+
+async function callTool(name, args = {}, id = 1) {
+  const resp = await fetch(MCP_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream'
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name, arguments: args }
+    })
+  });
+  return await parseSSE(resp);
+}
+
+// --- Vercel handler ---
 export default async function handler(req, res) {
   const ticker = (req.query.ticker || '').toUpperCase();
   if (!ticker) {
     return res.status(400).json({ error: 'Missing ticker param' });
   }
 
-  // Table retention rules (from your spreadsheet)
   const tableRules = {
     "shibui.general_info": { mode: "keep_full" },
     "shibui.analyst_estimates": { mode: "keep_full" },
