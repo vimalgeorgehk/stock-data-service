@@ -311,11 +311,7 @@ jsonFields.forEach(field => {
   }
 });
 
- 
-
-
-
-    res.json({
+     res.json({
          ticker: ticker,
          data: snapshot
     });
@@ -324,5 +320,119 @@ jsonFields.forEach(field => {
   }
 });
 
-// --- Start server ---
-app.listen(3000, () => console.log('API running locally on port 3000'));
+
+
+
+
+
+// Full snapshot route (dump tables for one ticker with retention rules)
+app.get('/full-snapshot/:ticker', async (req, res) => {
+  const ticker = (req.params.ticker || '').toUpperCase();
+  if (!ticker) return res.status(400).json({ error: 'Missing ticker param' });
+
+  // Table retention rules (from your spreadsheet)
+  const tableRules = {
+    "shibui.general_info": { mode: "keep_full" },
+    "shibui.analyst_estimates": { mode: "keep_full" },
+    "shibui.ownership_stats": { mode: "keep_full" },
+    "shibui.stock_quotes": { mode: "last_days", days: 30, orderDesc: true, limit: 1000 },
+    "shibui.technical_indicators": { mode: "last_days", days: 10, orderDesc: true, limit: 500 },
+    "shibui.valuation": { mode: "last_days", days: 10, orderDesc: true, limit: 500 },
+    "shibui.fundamentals_quarterly": { mode: "last_quarters", quarters: 16, orderDesc: true, limit: 100 },
+    "shibui.fundamentals_yearly": { mode: "last_years", years: 10, orderDesc: true, limit: 50 },
+    "shibui.fundamentals_derived_quarterly": { mode: "last_quarters", quarters: 16, orderDesc: true, limit: 100 },
+    "shibui.fundamentals_derived_daily": { mode: "last_days", days: 10, orderDesc: true, limit: 500 },
+    "shibui.earnings_quarterly": { mode: "last_quarters", quarters: 16, orderDesc: true, limit: 100 },
+    // "shibui.sec_filings": { mode: "skip" }  // marked "do not require" — omitted/skipped
+  };
+
+  try {
+    const results = {};
+
+    for (const [table, rule] of Object.entries(tableRules)) {
+      // Build SQL according to rule
+      let whereClauses = [`ticker='${ticker}'`];
+      let orderClause = '';
+      let limitClause = rule.limit ? `LIMIT ${rule.limit}` : '';
+
+      if (rule.mode === 'last_days') {
+        whereClauses.push(`date >= CURRENT_DATE - INTERVAL '${rule.days} days'`);
+        if (rule.orderDesc) orderClause = 'ORDER BY date DESC';
+      } else if (rule.mode === 'last_quarters') {
+        // approximate quarters as months (16 quarters = 48 months)
+        whereClauses.push(`date >= CURRENT_DATE - INTERVAL '${rule.quarters * 3} months'`);
+        if (rule.orderDesc) orderClause = 'ORDER BY date DESC';
+      } else if (rule.mode === 'last_years') {
+        whereClauses.push(`date >= CURRENT_DATE - INTERVAL '${rule.years} years'`);
+        if (rule.orderDesc) orderClause = 'ORDER BY date DESC';
+      } else if (rule.mode === 'keep_full') {
+        // no additional date filter
+        if (rule.orderDesc) orderClause = 'ORDER BY date DESC';
+      }
+
+      // Some tables may not have a date column; guard the ORDER BY/date filter by trying date but not failing if absent.
+      // Use a simple SELECT * with WHERE ticker and optional date filter.
+      const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+      const sql = `SELECT * FROM ${table} ${whereSql} ${orderClause} ${limitClause};`;
+
+      // Call the tool (your existing wrapper)
+      const parsed = await callTool("stock_data_query", {
+        user_prompt: `Dump fields for ${ticker} from ${table} with retention rule`,
+        query: sql
+      }, Date.now());
+
+      // Normalize tool output: try common nesting patterns
+      let data = parsed?.result ?? parsed;
+      // If the tool returns an object with structuredContent or content arrays, extract them
+      if (data && typeof data === 'object') {
+        // If MCP-style structuredContent
+        if (data.structuredContent && data.structuredContent.result) {
+          data = data.structuredContent.result;
+        } else if (Array.isArray(data.content) && data.content.length === 1 && typeof data.content[0].text === 'string') {
+          // Some responses put JSON in content[0].text
+          data = data.content[0].text;
+        }
+      }
+
+      // If still a string, try to parse JSON
+      if (typeof data === 'string') {
+        try {
+          data = JSON.parse(data);
+        } catch (err) {
+          // If parsing fails, keep raw string but log for debugging
+          console.error(`Failed to JSON.parse response for ${table}:`, err.message);
+        }
+      }
+
+      // If data is an object with nested fields that are JSON strings, attempt to parse them
+      if (Array.isArray(data)) {
+        data = data.map(row => {
+          if (row && typeof row === 'object') {
+            for (const [k, v] of Object.entries(row)) {
+              if (typeof v === 'string' && v.trim().startsWith('[') || v.trim().startsWith('{')) {
+                try {
+                  row[k] = JSON.parse(v);
+                } catch (e) {
+                  // leave as-is if parse fails
+                }
+              }
+            }
+          }
+          return row;
+        });
+      }
+
+      results[table] = data;
+    }
+
+    // Return clean JSON
+    res.json({
+      ticker,
+      data: results
+    });
+
+  } catch (err) {
+    console.error('Error in full-snapshot route:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
