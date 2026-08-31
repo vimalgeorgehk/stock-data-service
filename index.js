@@ -338,7 +338,7 @@ app.get('/full-snapshot/:ticker', async (req, res) => {
     "shibui.stock_quotes": { mode: "last_days", days: 30, orderDesc: true, limit: 1000 },
     "shibui.technical_indicators": { mode: "last_days", days: 10, orderDesc: true, limit: 500 },
     "shibui.valuation": { mode: "last_days", days: 10, orderDesc: true, limit: 500 },
-    "shibui.fundamentals_quarterly": { mode: "last_quarters", quarters: 16, orderDesc: true, limit: 100 },
+    "shibui.fundamentals_quarterly": { mode: "last_quarters", quarters: 8, orderDesc: true, limit: 100 },
     "shibui.fundamentals_yearly": { mode: "last_years", years: 10, orderDesc: true, limit: 50 },
     "shibui.fundamentals_derived_quarterly": { mode: "last_quarters", quarters: 16, orderDesc: true, limit: 100 },
     "shibui.fundamentals_derived_daily": { mode: "last_days", days: 10, orderDesc: true, limit: 500 },
@@ -405,22 +405,26 @@ app.get('/full-snapshot/:ticker', async (req, res) => {
       }
 
       // If data is an object with nested fields that are JSON strings, attempt to parse them
-      if (Array.isArray(data)) {
-        data = data.map(row => {
-          if (row && typeof row === 'object') {
-            for (const [k, v] of Object.entries(row)) {
-              if (typeof v === 'string' && v.trim().startsWith('[') || v.trim().startsWith('{')) {
-                try {
-                  row[k] = JSON.parse(v);
-                } catch (e) {
-                  // leave as-is if parse fails
-                }
-              }
+if (Array.isArray(data)) {
+  data = data.map(row => {
+    if (row && typeof row === 'object') {
+      for (const [k, v] of Object.entries(row)) {
+        if (typeof v === 'string') {
+          const trimmed = v.trim();
+          if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+              row[k] = JSON.parse(trimmed);
+            } catch (e) {
+              // keep original if parsing fails
             }
           }
-          return row;
-        });
+        }
       }
+    }
+    return row;
+  });
+}
+
 
       results[table] = data;
     }
@@ -436,3 +440,6 @@ app.get('/full-snapshot/:ticker', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.listen(3000, () => console.log('API running locally on port 3000'));
+
