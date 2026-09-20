@@ -437,7 +437,7 @@ if (Array.isArray(data)) {
     const feedUrl = `https://news.google.com/rss/search?q=${ticker}+stock+news&hl=en-US&gl=US&ceid=US:en`;
     const feed = await parser.parseURL(feedUrl);
 
-    // Extract top 5 headlines
+    // Extract top 10 headlines
     const news = feed.items.slice(0, 10).map(item => ({
       title: item.title,
       link: item.link,
