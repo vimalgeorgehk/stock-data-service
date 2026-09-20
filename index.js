@@ -1,10 +1,12 @@
-import Parser from 'rss-parser';
-const parser = new Parser();
+
 
 // index.js
 const express = require('express');
 //const fetch = require('node-fetch'); // If Node v18+, remove this and use global fetch
 const app = express();
+
+const Parser = require('rss-parser');
+const parser = new Parser();
 
 const MCP_URL = 'https://mcp.shibui.finance/mcp';
 
@@ -447,7 +449,8 @@ if (Array.isArray(data)) {
     // Return clean JSON
     res.json({
       ticker,
-      data: results
+      data: results,
+      news
     });
 
   } catch (err) {
