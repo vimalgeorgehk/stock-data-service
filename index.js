@@ -435,21 +435,21 @@ app.get('/full-snapshot/:ticker', async (req, res) => {
     }
 
     // --- Add recent news ---
-    const feedUrl = 'https://news.google.com/rss/search?q=${ticker}+stock+news&hl=en-US&gl=US&ceid=US:en';
-    const feed = await parser.parseURL(feedUrl);
+    // const feedUrl = 'https://news.google.com/rss/search?q=${ticker}+stock+news&hl=en-US&gl=US&ceid=US:en';
+     //const feed = await parser.parseURL(feedUrl);
 
     // Extract top 20 headlines
-    const news = feed.items.slice(0, 20).map(item => ({
-      title: item.title,
-      link: item.link,
-      pubDate: item.pubDate
-    }));
+     //const news = feed.items.slice(0, 20).map(item => ({
+      // title: item.title,
+       //link: item.link,
+      // pubDate: item.pubDate
+    // }));
 
     // Return clean JSON
     res.json({
       ticker,
-      data: results,
-      news
+      data: results
+    //   news
     });
 
   } catch (err) {
