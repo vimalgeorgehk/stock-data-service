@@ -296,29 +296,29 @@ LIMIT 1;
       query: sql
     }, 1003);
 
-const snapshot = response.result.structuredContent.result[0];
+    const snapshot = response.result.structuredContent.result[0];
 
-// List of fields that are JSON strings
-const jsonFields = [
-  'roic', 'pe', 'pfcf', 'profitMargin',
-  'fcfMargin', 'revenueGrowth', 'shares',
-  'fcf', 'eps', 'epsDiluted'
-];
+    // List of fields that are JSON strings
+    const jsonFields = [
+      'roic', 'pe', 'pfcf', 'profitMargin',
+      'fcfMargin', 'revenueGrowth', 'shares',
+      'fcf', 'eps', 'epsDiluted'
+    ];
 
-// Parse each field safely
-jsonFields.forEach(field => {
-  if (snapshot[field] && typeof snapshot[field] === 'string') {
-    try {
-      snapshot[field] = JSON.parse(snapshot[field]);
-    } catch (err) {
-      console.error(`Failed to parse ${field}:`, err);
-    }
-  }
-});
+    // Parse each field safely
+    jsonFields.forEach(field => {
+      if (snapshot[field] && typeof snapshot[field] === 'string') {
+        try {
+          snapshot[field] = JSON.parse(snapshot[field]);
+        } catch (err) {
+          console.error(`Failed to parse ${field}:`, err);
+        }
+      }
+    });
 
-     res.json({
-         ticker: ticker,
-         data: snapshot
+    res.json({
+      ticker: ticker,
+      data: snapshot
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -410,37 +410,36 @@ app.get('/full-snapshot/:ticker', async (req, res) => {
       }
 
       // If data is an object with nested fields that are JSON strings, attempt to parse them
-if (Array.isArray(data)) {
-  data = data.map(row => {
-    if (row && typeof row === 'object') {
-      for (const [k, v] of Object.entries(row)) {
-        if (typeof v === 'string') {
-          const trimmed = v.trim();
-          if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-            try {
-              row[k] = JSON.parse(trimmed);
-            } catch (e) {
-              // keep original if parsing fails
+      if (Array.isArray(data)) {
+        data = data.map(row => {
+          if (row && typeof row === 'object') {
+            for (const [k, v] of Object.entries(row)) {
+              if (typeof v === 'string') {
+                const trimmed = v.trim();
+                if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                  try {
+                    row[k] = JSON.parse(trimmed);
+                  } catch (e) {
+                    // keep original if parsing fails
+                  }
+                }
+              }
             }
           }
-        }
+          return row;
+        });
       }
-    }
-    return row;
-  });
-}
 
 
       results[table] = data;
     }
 
-
-// --- Add recent news ---
-    const feedUrl = `https://news.google.com/rss/search?q=${ticker}+stock+news&hl=en-US&gl=US&ceid=US:en`;
+    // --- Add recent news ---
+    const feedUrl = 'https://news.google.com/rss/search?q=${ticker}+stock+news&hl=en-US&gl=US&ceid=US:en';
     const feed = await parser.parseURL(feedUrl);
 
-    // Extract top 10 headlines
-    const news = feed.items.slice(0, 10).map(item => ({
+    // Extract top 20 headlines
+    const news = feed.items.slice(0, 20).map(item => ({
       title: item.title,
       link: item.link,
       pubDate: item.pubDate
